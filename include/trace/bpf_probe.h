@@ -46,7 +46,14 @@
 static notrace void							\
 __bpf_trace_##call(void *__data, proto)					\
 {									\
+	/* 在注册ftrace处理函数的时候，会把eBPF程序的指针作为私有字段，因此这里的\
+	 * __data指向当前eBPF程序。\
+	 */\
 	struct bpf_prog *prog = __data;					\
+	/* 经过一些列的处理后下面的宏定义会被展开为：				\
+	 * bpf_trace_runx(prog, (u64)args[0], ..., (u64)args[x - 1])，	\
+	 * 其中x为当前tracepoint的参数的个数					\
+	 */\
 	CONCATENATE(bpf_trace_run, COUNT_ARGS(args))(prog, CAST_TO_U64(args));	\
 }
 
