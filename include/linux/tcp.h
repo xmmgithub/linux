@@ -243,11 +243,13 @@ struct tcp_sock {
 	u32	rcv_tstamp;	/* timestamp of last received ACK (for keepalives) */
 	u32	snd_wl1;	/* Sequence for window update		*/
 	u32	tlp_high_seq;	/* snd_nxt at the time of TLP */
+	/* 平滑版本的 mdev_max */
 	u32	rttvar_us;	/* smoothed mdev_max			*/
 	u32	retrans_out;	/* Retransmitted packets out		*/
 	u16	advmss;		/* Advertised MSS			*/
 	u16	urg_data;	/* Saved octet of OOB data and control flags */
 	u32	lost;		/* Total data packets lost incl. rexmits */
+	/* 根据最后一个被ack的报文计算出来的rtt */
 	struct  minmax rtt_min;
 	/* OOO segments go in this rbtree. Socket lock must be held. */
 	struct rb_root	out_of_order_queue;
@@ -276,6 +278,7 @@ struct tcp_sock {
 	u32	mdev_us;	/* medium deviation			*/
 	u64	tcp_wstamp_ns;	/* departure time for next sent data packet */
 	u64	tcp_clock_cache; /* cache last tcp_clock_ns() (see tcp_mstamp_refresh()) */
+	/* 最近一次收到或者发送报文的时间戳，约等于当前时间 */
 	u64	tcp_mstamp;	/* most recent packet received/sent */
 	u32	rtt_seq;	/* sequence number to update rttvar	*/
 	struct list_head tsorted_sent_queue; /* time-sorted sent but un-SACKed skbs */
@@ -301,6 +304,9 @@ struct tcp_sock {
 	/* 当前发送窗口的第一个字节。*/
 	u32	snd_una;	/* First byte we want an ack for	*/
 	u32	window_clamp;	/* Maximal window to advertise		*/
+	/* 平滑版本的rtt，不至于导致单次rtt的波动引发rtt的大幅波动，按照
+	 * rtt = 7/8 rtt + 1/8 new 计算出来的。
+	 */
 	u32	srtt_us;	/* smoothed round trip time << 3 in usecs */
 	u32	packets_out;	/* Packets which are "in flight"	*/
 	u32	snd_up;		/* Urgent pointer		*/
