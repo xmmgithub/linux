@@ -396,6 +396,7 @@ static void tcp_probe_timer(struct sock *sk)
 	 * 如果发生了丢包，那么在重传超过sysctl_tcp_retries2后就会断链。
 	 */
 
+	/* 重传队列中有数据，那么就不需要进行0窗口探测（因为TCP窗口不会缩减） */
 	if (tp->packets_out || !skb) {
 		icsk->icsk_probes_out = 0;
 		icsk->icsk_probes_tstamp = 0;
@@ -422,8 +423,14 @@ static void tcp_probe_timer(struct sock *sk)
 	}
 	max_probes = READ_ONCE(sock_net(sk)->ipv4.sysctl_tcp_retries2);
 	if (sock_flag(sk, SOCK_DEAD)) {
+		/* 这里是处理已经处于DEAD（被close了，比如处于FIN_WAIT1状态）的
+		 * sk。可以看出来，
+		 */
 		const bool alive = inet_csk_rto_backoff(icsk, TCP_RTO_MAX) < TCP_RTO_MAX;
 
+		/* 重试次数超过了sysctl_tcp_retries2，且生存时间超过了
+		 * TCP_RTO_MAX，不再进行probe的尝试，直接结束sk。
+		 */
 		max_probes = tcp_orphan_retries(sk, alive);
 		if (!alive && icsk->icsk_backoff >= max_probes)
 			goto abort;

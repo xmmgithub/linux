@@ -363,6 +363,7 @@ struct napi_struct {
 	unsigned long		state;
 	int			weight;
 	int			defer_hard_irqs_count;
+	/* 和下面的gro_hash对应的，标志着哈希表中哪个位置存在数据 */
 	unsigned long		gro_bitmask;
 	int			(*poll)(struct napi_struct *, int);
 #ifdef CONFIG_NETPOLL
@@ -758,6 +759,7 @@ struct rps_map {
 struct rps_dev_flow {
 	u16 cpu;
 	u16 filter;
+	/* 记录的是当前的CPU上的backlog队列的tail值 */
 	unsigned int last_qtail;
 };
 #define RPS_NO_FILTER 0xffff
@@ -798,6 +800,9 @@ extern struct rps_sock_flow_table __rcu *rps_sock_flow_table;
 static inline void rps_record_sock_flow(struct rps_sock_flow_table *table,
 					u32 hash)
 {
+	/* 记录当前流到全局rps哈希表中。这里哈希表中存储的内容是：
+	 * 高位存储了哈希值，地位存储了CPU信息
+	 */
 	if (table && hash) {
 		unsigned int index = hash & table->mask;
 		u32 val = hash & ~rps_cpu_mask;
@@ -3310,6 +3315,7 @@ struct softnet_data {
 	/* input_queue_head should be written by cpu owning this struct,
 	 * and only read by other cpus. Worth using a cache line.
 	 */
+	/* 当前的CPU所处理的backlog上的报文数量，没处理完一个就行给这个计数器+1 */
 	unsigned int		input_queue_head ____cacheline_aligned_in_smp;
 
 	/* Elements below can be accessed between CPUs for RPS/RFS */
@@ -5093,6 +5099,9 @@ static inline bool net_gso_ok(netdev_features_t features, int gso_type)
 
 static inline bool skb_gso_ok(struct sk_buff *skb, netdev_features_t features)
 {
+	/* 检查网卡驱动支持的特性是否满足gso_type的要求（GSO-TCP,GSO-UDP等），
+	 * 并且检查网卡驱动是否支持链表（还能这样？）
+	 */
 	return net_gso_ok(features, skb_shinfo(skb)->gso_type) &&
 	       (!skb_has_frag_list(skb) || (features & NETIF_F_FRAGLIST));
 }
@@ -5100,6 +5109,9 @@ static inline bool skb_gso_ok(struct sk_buff *skb, netdev_features_t features)
 static inline bool netif_needs_gso(struct sk_buff *skb,
 				   netdev_features_t features)
 {
+	/* skb是GSO类型的skb，并且网卡驱动特性不满足GSO的要求，那么就需要进行软件
+	 * 分段。
+	 */
 	return skb_is_gso(skb) && (!skb_gso_ok(skb, features) ||
 		unlikely((skb->ip_summed != CHECKSUM_PARTIAL) &&
 			 (skb->ip_summed != CHECKSUM_UNNECESSARY)));
