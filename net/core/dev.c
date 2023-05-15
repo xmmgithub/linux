@@ -6656,6 +6656,14 @@ static int __napi_poll(struct napi_struct *n, bool *repoll)
 		/* flush too old packets
 		 * If HZ < 1000, flush all packets.
 		 */
+		/* 本次poll周期结束了，如果当前HZ < 1000，那么flush掉当前
+		 * napi哈希表中所有的skb。否则，只flush掉比较老的skb。
+		 *
+		 * (flush指的是将skb从哈希表gro_hash中移动到rx_list中)
+		 *
+		 * 这里估计考虑到如果HZ比较小的话，会存在一定的处理延迟，不能等待
+		 * 下一个周期。
+		 */
 		napi_gro_flush(n, HZ >= 1000);
 	}
 

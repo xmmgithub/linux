@@ -202,6 +202,7 @@ struct tcp_sock {
 	__cacheline_group_begin(tcp_sock_read_tx);
 	/* timestamp of last sent data packet (for restart window) */
 	u32	max_window;	/* Maximal window ever seen from peer	*/
+	/* 收包的慢启动阈值？当可用内存小于这个的时候，就尝试扩大窗口 */
 	u32	rcv_ssthresh;	/* Current window clamp			*/
 	u32	reordering;	/* Packet reordering metric.		*/
 	u32	notsent_lowat;	/* TCP_NOTSENT_LOWAT */
@@ -249,6 +250,7 @@ struct tcp_sock {
 	struct  minmax rtt_min;
 	/* OOO segments go in this rbtree. Socket lock must be held. */
 	struct rb_root	out_of_order_queue;
+	/* 发送端慢启动阈值 */
 	u32	snd_ssthresh;	/* Slow start size threshold		*/
 	__cacheline_group_end(tcp_sock_read_rx);
 
@@ -309,6 +311,9 @@ struct tcp_sock {
 /*
  *      Options received (usually on last packet, some only on SYN packets).
  */
+	/* 套接口层面的TCP接收选项，一般是取的最后一个skb上的。对于一些配置，也会取
+	 * SYN上的，比如MSS等。
+	 */
 	struct tcp_options_received rx_opt;
 	u8	nonagle     : 4,/* Disable Nagle algorithm?             */
 		rate_app_limited:1;  /* rate_{delivered,interval_us} limited? */
@@ -451,6 +456,9 @@ struct tcp_sock {
 
 	/* SACKs data, these 2 need to be together (see tcp_options_write) */
 	struct tcp_sack_block duplicate_sack[1]; /* D-SACK block */
+	/* 选择确认块，里面存储了已经接收到的乱序的连续的数据块。在收到乱序的报文的
+	 * 时候，会调用tcp_sack_new_ofo_skb来更新这里的数据。
+	 */
 	struct tcp_sack_block selective_acks[4]; /* The SACKS themselves*/
 
 	struct tcp_sack_block recv_sack_cache[4];

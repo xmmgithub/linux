@@ -419,8 +419,13 @@ struct sock {
 		struct sk_buff	*tail;
 	} sk_backlog;
 
+	/* 当前收包缓冲区中已经分配的内存大小 */
 #define sk_rmem_alloc sk_backlog.rmem_alloc
 
+	/* 预分配内存。在进行内存调度的时候（收包队列超过了缓冲区大小），不是按照报文
+	 * 大小来进行内存分配的，而是以page为单位进行分配的。这个字段就是保存了分配
+	 * 出来的内存剩余量。
+	 */
 	int			sk_forward_alloc;
 	u32			sk_reserved_mem;
 #ifdef CONFIG_NET_RX_BUSY_POLL
@@ -1684,6 +1689,7 @@ static inline void sk_mem_reclaim(struct sock *sk)
 {
 	int reclaimable;
 
+	/* 回收预分配的内存，以page为单位，小于page的就不管了。 */
 	if (!sk_has_account(sk))
 		return;
 
