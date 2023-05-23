@@ -233,6 +233,10 @@ bpf_trampoline_get_progs(const struct bpf_trampoline *tr, int *total, bool *ip_a
 	struct bpf_tramp_link **links;
 	int kind;
 
+	/* 分配一个新的bpf_tramp_links对象，并把tr中所有的linker实例的地址拷贝
+	 * 过来。
+	 */
+
 	*total = 0;
 	tlinks = kcalloc(BPF_TRAMP_MAX, sizeof(*tlinks), GFP_KERNEL);
 	if (!tlinks)
@@ -551,6 +555,9 @@ static int __bpf_trampoline_link_prog(struct bpf_tramp_link *link, struct bpf_tr
 	if (!hlist_unhashed(&link->tramp_hlist))
 		/* prog already linked */
 		return -EBUSY;
+	/* 遍历当前tr上已经attach的所有的BPF程序（当前类型），确保当前BPF程序没有
+	 * 已经attach到当前tr上。
+	 */
 	hlist_for_each_entry(link_exiting, &tr->progs_hlist[kind], tramp_hlist) {
 		if (link_exiting->link.prog != link->link.prog)
 			continue;
@@ -558,6 +565,7 @@ static int __bpf_trampoline_link_prog(struct bpf_tramp_link *link, struct bpf_tr
 		return -EBUSY;
 	}
 
+	/* 将当前BPF程序加入到tr的对应类型的哈希表中 */
 	hlist_add_head(&link->tramp_hlist, &tr->progs_hlist[kind]);
 	tr->progs_cnt[kind]++;
 	err = bpf_trampoline_update(tr, true /* lock_direct_mutex */);
@@ -784,10 +792,12 @@ struct bpf_trampoline *bpf_trampoline_get(u64 key,
 {
 	struct bpf_trampoline *tr;
 
+	/* 根据key查找或者分配一个新的bpf_trampoline实例。 */
 	tr = bpf_trampoline_lookup(key);
 	if (!tr)
 		return NULL;
 
+	/* 如果tr还没有初始化func信息，那么根据当前tgt_info上的信息来初始化它。 */
 	mutex_lock(&tr->mutex);
 	if (tr->func.addr)
 		goto out;
