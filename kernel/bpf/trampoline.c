@@ -191,11 +191,13 @@ static int modify_fentry(struct bpf_trampoline *tr, void *old_addr, void *new_ad
 	int ret;
 
 	if (tr->func.ftrace_managed) {
+		/* 进行了托管（ftrace本身也跟踪了这个函数），需要走ftrace那一套流程 */
 		if (lock_direct_mutex)
 			ret = modify_ftrace_direct(tr->fops, (long)new_addr);
 		else
 			ret = modify_ftrace_direct_nolock(tr->fops, (long)new_addr);
 	} else {
+		/* 如果没有进行托管，那么直接将对应的call指令更新到最新的trampoline即可 */
 		ret = bpf_arch_text_poke(ip, BPF_MOD_CALL, old_addr, new_addr);
 	}
 	return ret;
@@ -208,6 +210,9 @@ static int register_fentry(struct bpf_trampoline *tr, void *new_addr)
 	unsigned long faddr;
 	int ret;
 
+	/* 检查当前的函数是否被ftrace托管了，即ftrace内核配置是否开启了。这里可以看
+	 * 出来，tracing是不依赖于ftrace功能的。
+	 */
 	faddr = ftrace_location((unsigned long)ip);
 	if (faddr) {
 		if (!tr->fops)
@@ -216,9 +221,13 @@ static int register_fentry(struct bpf_trampoline *tr, void *new_addr)
 	}
 
 	if (tr->func.ftrace_managed) {
+		/* 为了不影响原始的ftrace的功能，如果ftrace功能开启了，那么就使用
+		 * ftrace的机制来跟踪当前的函数。
+		 */
 		ftrace_set_filter_ip(tr->fops, (unsigned long)ip, 0, 1);
 		ret = register_ftrace_direct(tr->fops, (long)new_addr);
 	} else {
+		/* 直接使用bpf模块的功能进行__fentry__ call指令的替换。 */
 		ret = bpf_arch_text_poke(ip, BPF_MOD_CALL, NULL, new_addr);
 	}
 
@@ -454,6 +463,7 @@ again:
 		goto out;
 	}
 
+	/* 调用架构相关的代码生成对应的trampoline指令集 */
 	err = arch_prepare_bpf_trampoline(im, im->image, im->image + size,
 					  &tr->func.model, tr->flags, tlinks,
 					  tr->func.addr);
@@ -464,7 +474,9 @@ again:
 
 	WARN_ON(tr->cur_image && total == 0);
 	if (tr->cur_image)
-		/* progs already running at this address */
+		/* 当前的tr上已经注册过trampoline了，这里只需要用新的trampoline
+		 * 更换原来老的即可，不用再进行ftrace层面的注册。
+		 */
 		err = modify_fentry(tr, tr->cur_image->image, im->image, lock_direct_mutex);
 	else
 		/* first time registering */
@@ -565,7 +577,9 @@ static int __bpf_trampoline_link_prog(struct bpf_tramp_link *link, struct bpf_tr
 		return -EBUSY;
 	}
 
-	/* 将当前BPF程序加入到tr的对应类型的哈希表中 */
+	/* 将当前BPF程序加入到tr的对应类型的哈希表中，并更新对应的ftrace record的
+	 * bpf trampoline以及更新call指令。
+	 */
 	hlist_add_head(&link->tramp_hlist, &tr->progs_hlist[kind]);
 	tr->progs_cnt[kind]++;
 	err = bpf_trampoline_update(tr, true /* lock_direct_mutex */);
