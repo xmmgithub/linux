@@ -489,6 +489,8 @@ int ip_defrag(struct net *net, struct sk_buff *skb, u32 user)
 	__IP_INC_STATS(net, IPSTATS_MIB_REASMREQDS);
 	skb_orphan(skb);
 
+	/* 进行IP分片的重组 */
+
 	/* Lookup (or create) queue header */
 	qp = ip_find(net, ip_hdr(skb), user, vif);
 	if (qp) {
