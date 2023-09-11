@@ -2417,6 +2417,8 @@ void sk_setup_caps(struct sock *sk, struct dst_entry *dst)
 {
 	u32 max_segs = 1;
 
+	/* 将dst缓存到sk上面，同时利用dst上面的一些信息初始化到套接口上面。 */
+
 	sk->sk_route_caps = dst->dev->features;
 	if (sk_is_tcp(sk))
 		sk->sk_route_caps |= NETIF_F_GSO;

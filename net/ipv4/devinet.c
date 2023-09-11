@@ -119,6 +119,11 @@ struct inet_fill_args {
 #define IN4_ADDR_HSIZE_SHIFT	8
 #define IN4_ADDR_HSIZE		(1U << IN4_ADDR_HSIZE_SHIFT)
 
+/* 本机所有使用到的IPv4地址都会在这个哈希表中。通过这个哈希表，用户可以快速地通过
+ * 提供的地址来查找到这个地址对应的网口设备等信息。
+ *
+ * 同一个IP地址可能会被多个网口使用，这里会为每个网口上的IP地址都创建一份实例。
+ */
 static struct hlist_head inet_addr_lst[IN4_ADDR_HSIZE];
 
 static u32 inet_addr_hash(const struct net *net, __be32 addr)
@@ -155,6 +160,9 @@ struct net_device *__ip_dev_find(struct net *net, __be32 addr, bool devref)
 	struct net_device *result = NULL;
 	struct in_ifaddr *ifa;
 
+	/* 根据源地址查找对应的网口。如果没有找到的话，就用FIB的方式从local表中进行
+	 * 查找。
+	 */
 	rcu_read_lock();
 	ifa = inet_lookup_ifaddr_rcu(net, addr);
 	if (!ifa) {
@@ -1339,6 +1347,12 @@ __be32 inet_select_addr(const struct net_device *dev, __be32 dst, int scope)
 	if (unlikely(IN_DEV_ROUTE_LOCALNET(in_dev)))
 		localnet_scope = RT_SCOPE_LINK;
 
+	/* 遍历当前网口上所有的地址，根据指定的地址和作用域进行匹配。如果没有找到匹配的，
+	 * 就直接使用当前第一个可用的地址？
+	 *
+	 * 这里是为目的地址选取一个源地址，因此优先选取在同一个网段的地址。如果没有的话，
+	 * 就选取一个任意可用的地址。
+	 */
 	in_dev_for_each_ifa_rcu(ifa, in_dev) {
 		if (ifa->ifa_flags & IFA_F_SECONDARY)
 			continue;
