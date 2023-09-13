@@ -413,23 +413,39 @@ static void coredump_task_exit(struct task_struct *tsk)
 	core_state = tsk->signal->core_state;
 	spin_unlock_irq(&tsk->sighand->siglock);
 
+	/*
+	 * 该过程会将mm与当前进程解除关联，期间如果当前进程是由vfork而来，
+	 * 那么会唤醒调用vfork的父进程。
+	 */
+
 	/* The vhost_worker does not particpate in coredumps */
 	if (core_state &&
 	    ((tsk->flags & (PF_IO_WORKER | PF_USER_WORKER)) != PF_USER_WORKER)) {
+		/* 存在core状态机，说明当前已经有coredump任务在等待dump当前的mm了。 */
 		struct core_thread self;
 
+		/* 将当前进程添加到core_state的dumper链表中。 */
 		self.task = current;
 		if (self.task->flags & PF_SIGNALED)
 			self.next = xchg(&core_state->dumper.next, &self);
 		else
 			self.task = NULL;
 		/*
-		 * Implies mb(), the result of xchg() must be visible
-		 * to core_state->dumper.
+		 * core_state->startup是一个complete，等待它的是在coredump_wait
+		 * 函数中，这个函数会等待所有的线程（准确的说，是所有使用了当前
+		 * mm的进程或者线程）都退出了才会开始进行coredump。
+		 *
+		 * nr_threads为0时，说明使用该mm的进程都已经退出了，可以
+		 * 唤醒coredump_wait进行内存的dump工作了。
 		 */
 		if (atomic_dec_and_test(&core_state->nr_threads))
 			complete(&core_state->startup);
 
+		/*
+		 * 下面处于内存的dump阶段，这个阶段进程会进入D状态并等待dump的完成。
+		 * 当dump完成后，会唤醒所有的core_state->dumper，并将dumper.task
+		 * 设置为NULL。通过判断self.task是否为NULL可以知道dump是否完成。
+		 */
 		for (;;) {
 			set_current_state(TASK_UNINTERRUPTIBLE|TASK_FREEZABLE);
 			if (!self.task) /* see coredump_finish() */
@@ -537,6 +553,10 @@ static void exit_mm(void)
 {
 	struct mm_struct *mm = current->mm;
 
+	/**
+	 * 该过程会将mm与当前进程解除关联，期间如果当前进程是由vfork而来，
+	 * 那么会唤醒调用vfork的父进程。
+	 */
 	exit_mm_release(current, mm);
 	if (!mm)
 		return;
@@ -564,6 +584,7 @@ static void exit_mm(void)
 	task_unlock(current);
 	mmap_read_unlock(mm);
 	mm_update_next_owner(mm);
+	/* 引用计数-1 */
 	mmput(mm);
 	if (test_thread_flag(TIF_MEMDIE))
 		exit_oom_victim();
@@ -817,6 +838,7 @@ void __noreturn do_exit(long code)
 
 	WARN_ON(tsk->plug);
 
+	/* 代码覆盖率模块的退出 */
 	kcov_task_exit(tsk);
 	kmsan_task_exit(tsk);
 
@@ -827,9 +849,15 @@ void __noreturn do_exit(long code)
 	validate_creds_for_do_exit(tsk);
 
 	io_uring_files_cancel();
+	/* 给当前进程设置上PF_EXITING的标志。 */
 	exit_signals(tsk);  /* sets PF_EXITING */
 
+	/* 刷新TASK_XACCT中的统计信息。 */
 	acct_update_integrals(tsk);
+	/**
+	 * 对signal->live减1并返回其值。在fork里，会对该值+1，因此如果
+	 * 该值为0，说明当前线程组的线程都已经退出，即group_dead
+	 */
 	group_dead = atomic_dec_and_test(&tsk->signal->live);
 	if (group_dead) {
 		/*
@@ -847,28 +875,42 @@ void __noreturn do_exit(long code)
 		if (tsk->mm)
 			setmax_mm_hiwater_rss(&tsk->signal->maxrss, tsk->mm);
 	}
+	/* 搜集统计信息。 */
 	acct_collect(code, group_dead);
 	if (group_dead)
 		tty_audit_exit();
+	/* 释放当前进程的audit模块资源 */
 	audit_free(tsk);
 
 	tsk->exit_code = code;
+	/* taskstats退出。 */
 	taskstats_exit(tsk, group_dead);
 
+	/**
+	 * 内存退出模块（进入可查看coredump详情）。
+	 */
 	exit_mm();
 
 	if (group_dead)
 		acct_process();
 	trace_sched_process_exit(tsk);
 
+	/* 信号量退出模块 */
 	exit_sem(tsk);
+	/* 共享内存退出模块 */
 	exit_shm(tsk);
+	/* 文件表退出模块 */
 	exit_files(tsk);
+	/* 根文件系统退出模块 */
 	exit_fs(tsk);
 	if (group_dead)
 		disassociate_ctty(1);
+	/* 命名空间退出模块 */
 	exit_task_namespaces(tsk);
+	/* 执行所有的待执行的task_works */
 	exit_task_work(tsk);
+
+	/* 架构相关的进程退出操作。 */
 	exit_thread(tsk);
 
 	/*
@@ -880,6 +922,7 @@ void __noreturn do_exit(long code)
 	perf_event_exit_task(tsk);
 
 	sched_autogroup_exit_task(tsk);
+	/* cgroup退出模块 */
 	cgroup_exit(tsk);
 
 	/*
@@ -888,6 +931,12 @@ void __noreturn do_exit(long code)
 	flush_ptrace_hw_breakpoint(tsk);
 
 	exit_tasks_rcu_start();
+
+	/*
+	 * 将退出的消息（SIGCHLD）发送给父进程，使得父进程可以回收当前进程的task_struct，
+	 * 同时设置当前进程退出状态为EXIT_ZOMBIE，即所谓的Z状态。
+	 * 如果父进程忽略了该消息，那么进程将执行自我清理策略，设置状态为EXIT_DEAD。
+	 */
 	exit_notify(tsk, group_dead);
 	proc_exit_connector(tsk);
 	mpol_put_task_policy(tsk);
@@ -912,6 +961,7 @@ void __noreturn do_exit(long code)
 	validate_creds_for_do_exit(tsk);
 	exit_task_stack_account(tsk);
 
+	/* STACK_DEBUG相关的调用 */
 	check_stack_usage();
 	preempt_disable();
 	if (tsk->nr_dirtied)
@@ -920,6 +970,7 @@ void __noreturn do_exit(long code)
 	exit_tasks_rcu_finish();
 
 	lockdep_free_task(tsk);
+	/* 最后的清理工作 */
 	do_task_dead();
 }
 
@@ -969,8 +1020,9 @@ void __noreturn make_task_dead(int signr)
 		panic("Oopsed too often (kernel.oops_limit is %d)", limit);
 
 	/*
-	 * We're taking recursive faults here in make_task_dead. Safest is to just
-	 * leave this task alone and wait for reboot.
+	 * 检查当前进程是否已经处于退出状态了。如果是，那么此时发生了重复的进程退出。
+	 * 这里内核会忽略该进程，不再继续下面的退出流程，而是将其设置为D状态，
+	 * 等待系统重启。
 	 */
 	if (unlikely(tsk->flags & PF_EXITING)) {
 		pr_alert("Fixing recursive fault but reboot is needed!\n");
@@ -995,8 +1047,13 @@ SYSCALL_DEFINE1(exit, int, error_code)
 void __noreturn
 do_group_exit(int exit_code)
 {
+	/* 线程组退出流程，该函数会使得当前线程组中所有的线程都退出，
+	 * 也就是当前进程会退出。
+	 */
 	struct signal_struct *sig = current->signal;
 
+	/* 进入到线程组退出流程后，sig会被设置SIGNAL_GROUP_EXIT标志。
+	 */
 	if (sig->flags & SIGNAL_GROUP_EXIT)
 		exit_code = sig->group_exit_code;
 	else if (sig->group_exec_task)
@@ -1011,13 +1068,16 @@ do_group_exit(int exit_code)
 		else if (sig->group_exec_task)
 			exit_code = 0;
 		else {
+			/* 设置线程组的退出码以及状态标志位 */
 			sig->group_exit_code = exit_code;
 			sig->flags = SIGNAL_GROUP_EXIT;
+			/* 这里会给所有的线程发送KILL的信号 */
 			zap_other_threads(current);
 		}
 		spin_unlock_irq(&sighand->siglock);
 	}
 
+	/* 进入到退出流程。可以看出，exit_group和exit的区别就是前者会杀死所有的线程。 */
 	do_exit(exit_code);
 	/* NOTREACHED */
 }

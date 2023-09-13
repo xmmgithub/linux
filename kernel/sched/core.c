@@ -5632,10 +5632,16 @@ static inline u64 cpu_resched_latency(struct rq *rq) { return 0; }
  * This function gets called by the timer code, with HZ frequency.
  * We call it with interrupts disabled.
  */
+/* 
+ * 周期性调度器的中断处理函数，会按照HZ的频率被调用，处理期间会关闭中断。
+ * 这是一个标记（tick）函数，用来标记当前任务是否需要被调度。
+ */
 void scheduler_tick(void)
 {
 	int cpu = smp_processor_id();
+	/* 获取当前CPU上的任务运行队列。 */
 	struct rq *rq = cpu_rq(cpu);
+	/* 获取当前运行队列中正在运行的任务。 */
 	struct task_struct *curr = rq->curr;
 	struct rq_flags rf;
 	unsigned long thermal_pressure;
@@ -5644,13 +5650,16 @@ void scheduler_tick(void)
 	if (housekeeping_cpu(cpu, HK_TYPE_TICK))
 		arch_scale_freq_tick();
 
+	/* 更新调度的一些时钟信息。 */
 	sched_clock_tick();
 
+	/* 锁定任务队列。 */
 	rq_lock(rq, &rf);
 
 	update_rq_clock(rq);
 	thermal_pressure = arch_scale_thermal_pressure(cpu_of(rq));
 	update_thermal_load_avg(rq_clock_thermal(rq), rq, thermal_pressure);
+	/* 调用具体的调度器类（如CFS、FIFO等）进行标记。 */
 	curr->sched_class->task_tick(rq, curr, 0);
 	if (sched_feat(LATENCY_WARN))
 		resched_latency = cpu_resched_latency(rq);
@@ -6698,12 +6707,16 @@ static void __sched notrace __schedule(unsigned int sched_mode)
 
 void __noreturn do_task_dead(void)
 {
-	/* Causes final put_task_struct in finish_task_switch(): */
+	/* 更新当前进程的状态为TASK_DEAD */
 	set_special_state(TASK_DEAD);
 
 	/* Tell freezer to ignore us: */
 	current->flags |= PF_NOFREEZE;
 
+	/*
+	 * 走到这里，当前进程将不会再运行以及执行任何代码，
+	 * 因为进程不会再被调度到了，一切都结束了（莫名的伤感）。
+	 */
 	__schedule(SM_NONE);
 	BUG();
 
