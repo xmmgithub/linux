@@ -1078,12 +1078,28 @@ int nft_set_catchall_validate(const struct nft_ctx *ctx, struct nft_set *set);
 int nf_tables_bind_chain(const struct nft_ctx *ctx, struct nft_chain *chain);
 void nf_tables_unbind_chain(const struct nft_ctx *ctx, struct nft_chain *chain);
 
+/* nftables是一套与iptables独立的防火墙模块，其有着比iptables更加易于使用、
+ * 更加高效且更好的兼容性（支持arp、ipv4、ipv6等各种协议，相当于all in one）
+ *
+ * 在框架方面，它不像iptables需要加载额外的match、target等来扩展功能，而是
+ * 所有的功能都可以直接使用，开箱即用。
+ */
+
 enum nft_chain_types {
 	NFT_CHAIN_T_DEFAULT = 0,
 	NFT_CHAIN_T_ROUTE,
 	NFT_CHAIN_T_NAT,
 	NFT_CHAIN_T_MAX
 };
+
+/* 该结构体用于定义chain_type。chain_type与chain的关系可以理解为类型与实例
+ * 的关系。一个table里可以有若干个链，但是每个链作用的HOOK点以及HOOK点的钩子
+ * 函数（处理逻辑）都是通过chain_type定义的。
+ * 
+ * 在添加chain的时候，要指定该链所属于的chain_type，从而决定这个链在其所对应的
+ * HOOK点上所发挥的作用。其中，chain的HOOK点必须在chain_type的hook_mask内。
+ * 可以理解为该结构体存储了nftable的元数据（核心结构体）。
+ */
 
 /**
  * 	struct nft_chain_type - nf_tables chain type info

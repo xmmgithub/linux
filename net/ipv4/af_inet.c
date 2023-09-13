@@ -134,6 +134,10 @@ void inet_sock_destruct(struct sock *sk)
 {
 	struct inet_sock *inet = inet_sk(sk);
 
+	/* 清空接收队列和错误队列里的数据。在套接口处于CLOSE状态，并且DEAD的情况下，
+	 * 会对其路由信息进行释放。
+	 */
+
 	__skb_queue_purge(&sk->sk_receive_queue);
 	__skb_queue_purge(&sk->sk_error_queue);
 
@@ -818,9 +822,7 @@ int inet_accept(struct socket *sock, struct socket *newsock, int flags,
 }
 EXPORT_SYMBOL(inet_accept);
 
-/*
- *	This does both peername and sockname.
- */
+/* 获取当前套接口（地址、端口等）或者对端的信息。 */
 int inet_getname(struct socket *sock, struct sockaddr *uaddr,
 		 int peer)
 {
@@ -1528,9 +1530,11 @@ struct sk_buff *inet_gro_receive(struct list_head *head, struct sk_buff *skb)
 	if (!ops || !ops->callbacks.gro_receive)
 		goto out;
 
+	/* 只处理IPv4和IP头部长度为20的情况 */
 	if (*(u8 *)iph != 0x45)
 		goto out;
 
+	/* 不处理IP分片的情况 */
 	if (ip_is_fragment(iph))
 		goto out;
 
@@ -1542,6 +1546,7 @@ struct sk_buff *inet_gro_receive(struct list_head *head, struct sk_buff *skb)
 	flush = (u16)((ntohl(*(__be32 *)iph) ^ skb_gro_len(skb)) | (id & ~IP_DF));
 	id >>= 16;
 
+	/* 遍历hash表里面属于同一个流、相同的IP地址的skb， */
 	list_for_each_entry(p, head, list) {
 		struct iphdr *iph2;
 		u16 flush_id;

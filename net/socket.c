@@ -1566,6 +1566,7 @@ int __sock_create(struct net *net, int family, int type, int protocol,
 	/* Now protected by module ref count */
 	rcu_read_unlock();
 
+	/* 对于IP协议，这里会调用 inet_create 进行套接口sk的创建和初始化 */
 	err = pf->create(net, sock, protocol, kern);
 	if (err < 0)
 		goto out_module_put;

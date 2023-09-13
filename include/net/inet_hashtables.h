@@ -441,7 +441,10 @@ static inline struct sock *__inet_lookup(struct net *net,
 	u16 hnum = ntohs(dport);
 	struct sock *sk;
 
-	/* 对于连接了的sock，查找比较简单，直接根据属性进行匹配即可 */
+	/* 对于连接了的sock，查找比较简单，直接根据属性进行匹配即可。需要注意的是，
+	 * 这里除了会匹配五元组以外，还会匹配网口，即报文的收包网口必须要合套接口
+	 * 所适用的网口（发包网口）一致，否则会认为不是匹配的套接口。
+	 */
 	sk = __inet_lookup_established(net, hashinfo, saddr, sport,
 				       daddr, hnum, dif, sdif);
 	*refcounted = true;

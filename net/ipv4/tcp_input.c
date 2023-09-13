@@ -3691,6 +3691,10 @@ static void tcp_ack_probe(struct sock *sk)
 	/* Was it a usable window open? */
 	if (!head)
 		return;
+	/* 发送队列（尚未发送的数据）的第一个报文在接收方的窗口范围内，那么说明当前
+	 * 不是0窗口了，可以取消probe定时器了。否则，重置probe超时定时器，继续
+	 * 
+	 */
 	if (!after(TCP_SKB_CB(head)->end_seq, tcp_wnd_end(tp))) {
 		icsk->icsk_backoff = 0;
 		icsk->icsk_probes_tstamp = 0;
@@ -3973,14 +3977,16 @@ static void tcp_process_tlp_ack(struct sock *sk, u32 ack, int flag)
 		tp->tlp_high_seq = 0;
 	} else if (flag & FLAG_DSACK_TLP) {
 		/* This DSACK means original and TLP probe arrived; no loss */
+		/* 存在DASCK，说明重传的最后一个尾部报文是重复报文，没有发生丢包。 */
 		tp->tlp_high_seq = 0;
 	} else if (after(ack, tp->tlp_high_seq)) {
-		/* ACK advances: there was a loss, so reduce cwnd. Reset
-		 * tlp_high_seq in tcp_init_cwnd_reduction()
+		/* 如果ack>tlp_high_seq，说明的确发生了丢包（？），进入到CWR状态，
+		 * 进行拥塞窗口的缩减。
 		 */
 		tcp_init_cwnd_reduction(sk);
 		tcp_set_ca_state(sk, TCP_CA_CWR);
 		tcp_end_cwnd_reduction(sk);
+		/* 这里会使套接口进入到DISCOVER状态。 */
 		tcp_try_keep_open(sk);
 		NET_INC_STATS(sock_net(sk),
 				LINUX_MIB_TCPLOSSPROBERECOVERY);
@@ -4201,6 +4207,7 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 
 	tcp_rack_update_reo_wnd(sk, &rs);
 
+	/* 处理TLP算法。tlp_high_seq有数据就说明当前处于TLP的状态，调用 */
 	if (tp->tlp_high_seq)
 		tcp_process_tlp_ack(sk, ack, flag);
 
@@ -4247,9 +4254,9 @@ no_queue:
 				      &rexmit);
 		tcp_newly_delivered(sk, delivered, flag);
 	}
-	/* If this ack opens up a zero window, clear backoff.  It was
-	 * being used to time the probes, and is probably far higher than
-	 * it needs to be for normal retransmission.
+
+	/* 如果当前的ack报文打开了零窗口（窗口大小变得不是0了），那么就会取消probe
+	 * 定时器，同时
 	 */
 	tcp_ack_probe(sk);
 
@@ -5409,9 +5416,15 @@ static void tcp_data_queue(struct sock *sk, struct sk_buff *skb)
 	bool fragstolen;
 	int eaten;
 
+	/* 将skb放入到套接口的收包队列。这里可能会调用tcp_queue_rcv来将其放到
+	 * sk_receive_queue收包队列，也可能在乱序的情况下调用tcp_data_queue_ofo
+	 * 将其放到ofo队列。
+	 */
+
 	/* If a subflow has been reset, the packet should not continue
 	 * to be processed, drop the packet.
 	 */
+	/* 如果是mptcp协议的话，调用mptcp_incoming_options来做一些预处理的工作 */
 	if (sk_is_mptcp(sk) && !mptcp_incoming_options(sk, skb)) {
 		__kfree_skb(skb);
 		return;
@@ -6948,7 +6961,7 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 	case TCP_LISTEN:
 		/*
 		 * LISTEN状态下的处理逻辑。首先对报文的各个标志位的合法性进行检查，
-		 * 最后会调用tcp_conn_request函数对TCP建链请求进行处理。
+		 * 最后会调用 tcp_conn_request 函数对TCP建链请求进行处理。
 		 */
 		if (th->ack)
 			return 1;
@@ -7208,6 +7221,7 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 	case TCP_CLOSE_WAIT:
 	case TCP_CLOSING:
 	case TCP_LAST_ACK:
+		/* 还不清楚这段是干嘛的？ */
 		if (!before(TCP_SKB_CB(skb)->seq, tp->rcv_nxt)) {
 			/* If a subflow has been reset, the packet should not
 			 * continue to be processed, drop the packet.
@@ -7498,8 +7512,9 @@ int tcp_conn_request(struct request_sock_ops *rsk_ops,
 
 	syncookies = READ_ONCE(net->ipv4.sysctl_tcp_syncookies);
 
-	/*
-	 * 检查是否使用cookie。在sysctl_tcp_syncookies为2（始终启用）或者当前
+	/* 被动建立TCP连接的处理函数。
+	 * 
+	 * 首先检查是否使用cookie。在sysctl_tcp_syncookies为2（始终启用）或者当前
 	 * 套接口的半连接状态套接口backlog队列满了的情况下，会使用cookie来进行
 	 * 建链。TW情况下，不能使用cookie。
 	 * 如果当前内核没有启用cookie，那么直接返回失败。
