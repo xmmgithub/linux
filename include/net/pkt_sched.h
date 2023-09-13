@@ -121,6 +121,7 @@ void __qdisc_run(struct Qdisc *q);
 
 static inline void qdisc_run(struct Qdisc *q)
 {
+	/* 检查是否在运行，以及加锁 */
 	if (qdisc_run_begin(q)) {
 		__qdisc_run(q);
 		qdisc_run_end(q);

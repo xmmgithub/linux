@@ -1584,6 +1584,7 @@ int neigh_connected_output(struct neighbour *neigh, struct sk_buff *skb)
 	do {
 		__skb_pull(skb, skb_network_offset(skb));
 		seq = read_seqbegin(&neigh->ha_lock);
+		/* 调用 eth_header 来进行报文eth头部的封装。 */
 		err = dev_hard_header(skb, dev, ntohs(skb->protocol),
 				      neigh->ha, NULL, skb->len);
 	} while (read_seqretry(&neigh->ha_lock, seq));
