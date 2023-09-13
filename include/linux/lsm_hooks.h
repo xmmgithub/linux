@@ -36,6 +36,13 @@ union security_list_options {
 	#undef LSM_HOOK
 };
 
+/* 这个结构体里为每个钩子定义了个链表，每个链表里存储了所有的钩子函数。
+ * 在进行钩子函数调用的时候，会遍历对应的钩子里的钩子函数来调用。
+ * 
+ * 该对象只有一个全局实例：security_hook_heads，所有的钩子函数都采用
+ * struct security_hook_list[]数组来定义（使用LSM_HOOK_INIT帮助函数）。
+ * 其中每个实例都被挂在到了security_hook_heads对应的链表中。
+ */
 struct security_hook_heads {
 	#define LSM_HOOK(RET, DEFAULT, NAME, ...) struct hlist_head NAME;
 	#include "lsm_hook_defs.h"
