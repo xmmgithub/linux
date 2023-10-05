@@ -3103,6 +3103,7 @@ static void __netif_reschedule(struct Qdisc *q)
 	local_irq_restore(flags);
 }
 
+/* 发包软中断的调度函数。注意，这里长得和napi_schedule有点像，不能搞混了。 */
 void __netif_schedule(struct Qdisc *q)
 {
 	if (!test_and_set_bit(__QDISC_STATE_SCHED, &q->state))

@@ -2468,7 +2468,7 @@ do_time_wait:
 	switch (tcp_timewait_state_process(inet_twsk(sk), skb, th)) {
 	case TCP_TW_SYN: {
 		/*
-		 * 端口重用的情况，有新的连接想使用这个套接口。此时，需要将TW套接口
+		 * tw reuse的情况，有新的连接想使用这个套接口。此时，需要将TW套接口
 		 * 关闭，然后当做一个新的建链请求来处理。
 		 */
 		struct sock *sk2 = inet_lookup_listener(net,
