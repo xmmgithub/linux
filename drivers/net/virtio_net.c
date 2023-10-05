@@ -441,6 +441,7 @@ static void virtqueue_napi_schedule(struct napi_struct *napi,
 				    struct virtqueue *vq)
 {
 	if (napi_schedule_prep(napi)) {
+		/* 关闭队列的硬中断，调度napi */
 		virtqueue_disable_cb(vq);
 		__napi_schedule(napi);
 	}
@@ -469,13 +470,33 @@ static void skb_xmit_done(struct virtqueue *vq)
 	struct virtnet_info *vi = vq->vdev->priv;
 	struct napi_struct *napi = &vi->sq[vq2txq(vq)].napi;
 
+	/* 这个函数会在发包队列的硬中断处理函数中调用。如果开启了napi_tx，那么就
+	 * 调度napi；否则，调度发包软中断，进行报文的发送。发包软中断面向的对象是
+	 * qdisc。
+	 *
+	 * 这里可以看出来，napi tx是流程是：
+	 *	start_xmit // 清理skb，开中断（需要kick的话）
+	 *		->
+	 *	skb_xmit_done // 关中断，调度napi
+	 *		->
+	 *	virtnet_poll_tx // 关中断，清理skb，调度qdisc，开延迟中断（完事了的话）
+	 *		->
+	 *	qdisc
+	 *
+	 * 没有napi tx的话，tx的流程是：
+	 *	start_xmit // 清理skb，空闲buffer不足的话就开中断
+	 *		->
+	 *	skb_xmit_done // 关中断，调度qdisc
+	 *		->
+	 *	qdisc
+	 */
+
 	/* Suppress further interrupts. */
 	virtqueue_disable_cb(vq);
 
 	if (napi->weight)
 		virtqueue_napi_schedule(napi, vq);
 	else
-		/* We were probably waiting for more output buffers. */
 		netif_wake_subqueue(vi->dev, vq2txq(vq));
 }
 
@@ -763,6 +784,7 @@ static void virtnet_rq_set_premapped(struct virtnet_info *vi)
 	}
 }
 
+/* 释放队列上已经完成的报文。这里的in_napi决定了是否将skb释放到napi的缓冲链表中。 */
 static void free_old_xmit_skbs(struct send_queue *sq, bool in_napi)
 {
 	unsigned int len;
@@ -2011,6 +2033,9 @@ static bool try_fill_recv(struct virtnet_info *vi, struct receive_queue *rq,
 	return !oom;
 }
 
+/* 收包的中断处理函数的callback。这里可以看出来，virtio_net的收包中断没有做任何
+ * 处理，只是简单地调度当前的napi对象。
+ */
 static void skb_recv_done(struct virtqueue *rvq)
 {
 	struct virtnet_info *vi = rvq->vdev->priv;
@@ -2129,6 +2154,9 @@ static int virtnet_receive(struct receive_queue *rq, int budget,
 	return packets;
 }
 
+/* 在收包阶段，也进行napi tx的清理工作，包括释放老的skb、如果空闲的实例比较多
+ * 的话（19个）就清除__QUEUE_STATE_DRV_XOFF标志，唤醒发包软中断。
+ */
 static void virtnet_poll_cleantx(struct receive_queue *rq)
 {
 	struct virtnet_info *vi = rq->vq->vdev->priv;
@@ -2277,6 +2305,9 @@ err_enable_qp:
 	return err;
 }
 
+/* 发包的napi poll函数。
+ * 
+ */
 static int virtnet_poll_tx(struct napi_struct *napi, int budget)
 {
 	struct send_queue *sq = container_of(napi, struct send_queue, napi);
@@ -2294,12 +2325,14 @@ static int virtnet_poll_tx(struct napi_struct *napi, int budget)
 
 	txq = netdev_get_tx_queue(vi->dev, index);
 	__netif_tx_lock(txq, raw_smp_processor_id());
+	/* 关中断 */
 	virtqueue_disable_cb(sq->vq);
 	free_old_xmit_skbs(sq, true);
 
 	if (sq->vq->num_free >= 2 + MAX_SKB_FRAGS)
 		netif_tx_wake_queue(txq);
 
+	/* 开中断 */
 	opaque = virtqueue_enable_cb_prepare(sq->vq);
 
 	done = napi_complete_done(napi, 0);
@@ -2397,7 +2430,16 @@ static netdev_tx_t start_xmit(struct sk_buff *skb, struct net_device *dev)
 	 * 如果空间不足的话，就会调整网口的状态。
 	 */
 
-	/* Free up any pending old buffers before queueing new ones. */
+	/* 发包之前，先进行skb的清理工作。如果使用napi_tx的话，就关闭当前tx队列上的
+	 * 中断callback。这里的tx napi并不是采用轮训的方式进行发包，而是采用轮训的方
+	 * 式来清理已经发送完成的报文。常规情况下，这个工作是需要在发包硬中断中来进行
+	 * 的。为了避免和硬中断中的处理产生竞争，这里会在清理之前关闭队列上的cb。
+	 * 
+	 * 这里可以看出来，tx skb的清理会在三个地方触发：
+	 * - 当前队列发包
+	 * - 当前队列相同索引的收包队列收包
+	 * - 使用napi tx
+	 */
 	do {
 		if (use_napi)
 			virtqueue_disable_cb(sq->vq);
@@ -2425,14 +2467,22 @@ static netdev_tx_t start_xmit(struct sk_buff *skb, struct net_device *dev)
 		return NETDEV_TX_OK;
 	}
 
-	/* Don't wait up for transmitted skbs to be freed. */
+	/* 没有启用napi tx的话，把skb放到ringbuf中，就对其进行了孤立。 这是因为
+	 * 没有napi tx的话，skb的释放依赖于新的报文的发送。如果长时间没有报文发送
+	 * 的话，那么skb会长时间不释放，导致死锁问题。
+	 */
 	if (!use_napi) {
 		skb_orphan(skb);
 		nf_reset_ct(skb);
 	}
 
+	/* 如果空闲的buffer比较少了，就stop队列（设置__QUEUE_STATE_DRV_XOFF），
+	 * 同时打开发包延迟中断。不开启napi tx的情况下，发包中断只有在这种情况下才会
+	 * 被打开。然而buffer满了的情况是相当少的，可以默认这里不会开中断。
+	 */
 	check_sq_full_and_disable(vi, dev, sq);
 
+	/* kick是清空的意思？后面没有报文了，或者队列off了 */
 	if (kick || netif_xmit_stopped(txq)) {
 		if (virtqueue_kick_prepare(sq->vq) && virtqueue_notify(sq->vq)) {
 			u64_stats_update_begin(&sq->stats.syncp);
@@ -4416,6 +4466,7 @@ static int virtnet_alloc_queues(struct virtnet_info *vi)
 		vi->rq[i].pages = NULL;
 		netif_napi_add_weight(vi->dev, &vi->rq[i].napi, virtnet_poll,
 				      napi_weight);
+		/* 全局禁用napi_tx了的话，napi_weight永久为0 */
 		netif_napi_add_tx_weight(vi->dev, &vi->sq[i].napi,
 					 virtnet_poll_tx,
 					 napi_tx ? napi_weight : 0);
