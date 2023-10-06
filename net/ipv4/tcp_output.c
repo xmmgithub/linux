@@ -2763,9 +2763,8 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 		if (tcp_pacing_check(sk))
 			break;
 
-		/* 
-		 * 初始化并获取skb中的段数，即：skb->len / MSS。当段数为1的时候
-		 * 代表当前
+		/* 初始化并获取skb中的段数，即：skb->len / MSS。当段数为1的时候
+		 * 代表当前没有开启GSO。
 		 */
 		tso_segs = tcp_init_tso_segs(skb, mss_now);
 		BUG_ON(!tso_segs);
@@ -2791,7 +2790,10 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 			break;
 		}
 
-		/* 下面部分是Nagle算法的检查，判断是否需要延迟发送。 */
+		/* 下面部分是Nagle算法的检查，判断是否需要延迟发送。这个算法的核心思想：
+		 * 队列中最后一个skb的长度小于mss，且存在在外数据，那么就不进行发送，
+		 * 而是利用ack进行驱动数据的发送。
+		 */
 		if (tso_segs == 1) {
 			if (unlikely(!tcp_nagle_test(tp, skb, mss_now,
 						     (tcp_skb_is_last(sk, skb) ?
