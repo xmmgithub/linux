@@ -240,6 +240,7 @@ struct tcp_sock {
 	__cacheline_group_begin(tcp_sock_read_rx);
 	/* 已经拷贝到用户态的最后一个序列号 */
 	u32	copied_seq;	/* Head of yet unread data */
+	/* 最后一次收到ACK的时间戳（不一定确认了新的数据） */
 	u32	rcv_tstamp;	/* timestamp of last received ACK (for keepalives) */
 	u32	snd_wl1;	/* Sequence for window update		*/
 	u32	tlp_high_seq;	/* snd_nxt at the time of TLP */
@@ -276,6 +277,9 @@ struct tcp_sock {
 	u32	pushed_seq;	/* Last pushed seq, required to talk to windows */
 	u32	lsndtime;
 	u32	mdev_us;	/* medium deviation			*/
+	/* 这个看样子和tcp_mstamp是一致的哦，只不过这个针对的是发送报文的，这个时间会
+	 * 在发送报文的时候被更新，并设置到发送报文里面。
+	 */
 	u64	tcp_wstamp_ns;	/* departure time for next sent data packet */
 	u64	tcp_clock_cache; /* cache last tcp_clock_ns() (see tcp_mstamp_refresh()) */
 	/* 最近一次收到或者发送报文的时间戳，约等于当前时间 */
