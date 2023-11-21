@@ -171,6 +171,9 @@ static bool bpf_global_percpu_ma_set;
  */
 
 /* verifier_state + insn_idx are pushed to stack when branch is encountered */
+/* 这个结构体是用来跟踪分支的，每遇到一个分支，就会创建一个elem保存起来。这里记录了分支
+ * 的一些情况，包括当前产生分支的指令等。
+ */
 struct bpf_verifier_stack_elem {
 	/* verifer state is 'st'
 	 * before processing instruction 'insn_idx'
@@ -1752,6 +1755,7 @@ static void __mark_reg_known(struct bpf_reg_state *reg, u64 imm)
 
 static void __mark_reg32_known(struct bpf_reg_state *reg, u64 imm)
 {
+	/* 这个代码是将imm存储到var_off的低32位中 */
 	reg->var_off = tnum_const_subreg(reg->var_off, imm);
 	reg->s32_min_value = (s32)imm;
 	reg->s32_max_value = (s32)imm;
@@ -9239,6 +9243,8 @@ static int setup_func_entry(struct bpf_verifier_env *env, int subprog, int calls
 	struct bpf_func_state *caller, *callee;
 	int err;
 
+	/* 检查器走到了call subprog的逻辑。这里会 */
+
 	if (state->curframe + 1 >= MAX_CALL_FRAMES) {
 		verbose(env, "the call stack of %d frames is too deep\n",
 			state->curframe + 2);
@@ -9255,6 +9261,7 @@ static int setup_func_entry(struct bpf_verifier_env *env, int subprog, int calls
 	callee = kzalloc(sizeof(*callee), GFP_KERNEL);
 	if (!callee)
 		return -ENOMEM;
+	/* 为当前subprog分配新的栈帧 */
 	state->frame[state->curframe + 1] = callee;
 
 	/* callee cannot access r0, r6 - r9 for reading and has to write
@@ -9464,6 +9471,7 @@ static int check_func_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	}
 
 	caller = state->frame[state->curframe];
+	/* 检查目标函数的原型和当前调用的参数类型是否匹配 */
 	err = btf_check_subprog_call(env, subprog, caller->regs);
 	if (err == -EFAULT)
 		return err;
@@ -14180,6 +14188,14 @@ static int is_scalar_branch_taken(struct bpf_reg_state *reg1, struct bpf_reg_sta
 	s64 smin2 = is_jmp32 ? (s64)reg2->s32_min_value : reg2->smin_value;
 	s64 smax2 = is_jmp32 ? (s64)reg2->s32_max_value : reg2->smax_value;
 
+	/* 针对各种情况，检查要选取的分支，即是会执行下一条指令还是使用goto进行跳转。
+	 * 对于立即数，这里会直接进行逻辑判断；对于寄存器，这里会判断是否存在寄存器
+	 * 中的值是const类型。
+	 *
+	 * 这里只处理源数据是立即数的情况，没有管目的数据是立即数的情况？可能这是编译器
+	 * 的默认处理方式，存在立即数的情况下，放到源数据里。
+	 */
+
 	switch (opcode) {
 	case BPF_JEQ:
 		/* constants, umin/umax and smin/smax checks would be
@@ -14855,6 +14871,7 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 		if (err)
 			return err;
 
+		/* pkt类型的指针不能和非pkt类型的数据类型进行比较 */
 		src_reg = &regs[insn->src_reg];
 		if (!(reg_is_pkt_pointer_any(dst_reg) && reg_is_pkt_pointer_any(src_reg)) &&
 		    is_pointer_value(env, insn->src_reg)) {
@@ -14915,12 +14932,21 @@ static int check_cond_jmp_op(struct bpf_verifier_env *env,
 		return 0;
 	}
 
+	/* pred为0或者1的情况下，都是指令的执行顺序已经确定了的，也就是说检查逻辑不会
+	 * 分叉。下面的处理逻辑都是分叉了的，即不能确定是否会跳转。
+	 */
 	other_branch = push_stack(env, *insn_idx + insn->off + 1, *insn_idx,
 				  false);
 	if (!other_branch)
 		return -EFAULT;
 	other_branch_regs = other_branch->frame[other_branch->curframe]->regs;
 
+	/* 根据比较的逻辑来进一步推断（设置）寄存器的范围。例如：
+	 *   if (a > 100)
+	 *       //这条路径里a的min就是101
+	 *   else
+	 *       //这条路径里面a的max就是100
+	 */
 	if (BPF_SRC(insn->code) == BPF_X) {
 		err = reg_set_min_max(env,
 				      &other_branch_regs[insn->dst_reg],
@@ -17569,6 +17595,13 @@ static int do_check(struct bpf_verifier_env *env)
 						return -EINVAL;
 					}
 				}
+
+				/* 针对不同的call类型做不同的检查，这里存在三种函数
+				 * 调用：
+				 *   kfunc：调用的是经过注释的内核函数
+				 *   subprog：调用的是子程序（不是tail call）
+				 *   helper：helper函数的调用
+				 */
 				if (insn->src_reg == BPF_PSEUDO_CALL) {
 					err = check_func_call(env, insn, &env->insn_idx);
 				} else if (insn->src_reg == BPF_PSEUDO_KFUNC_CALL) {
@@ -17671,6 +17704,9 @@ process_bpf_exit:
 					continue;
 				}
 			} else {
+				/* 条件判断跳转的检查逻辑，同时也是检查器中分叉的处理
+				 * 逻辑。
+				 */
 				err = check_cond_jmp_op(env, insn, &env->insn_idx);
 				if (err)
 					return err;
