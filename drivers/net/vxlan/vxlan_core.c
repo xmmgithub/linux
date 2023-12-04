@@ -1693,6 +1693,7 @@ static int vxlan_rcv(struct sock *sk, struct sk_buff *skb)
 
 	vni = vxlan_vni(vxlan_hdr(skb)->vx_vni);
 
+	/* 根据vni，从当前vs的vxlan链表中找到对应的vxlan */
 	vxlan = vxlan_vs_find_vni(vs, skb->dev->ifindex, vni, &vninode);
 	if (!vxlan)
 		goto drop;
@@ -1707,6 +1708,7 @@ static int vxlan_rcv(struct sock *sk, struct sk_buff *skb)
 		raw_proto = true;
 	}
 
+	/* 移动当前的data指针到内层报文的头部，同时进行csum的适配 */
 	if (__iptunnel_pull_header(skb, VXLAN_HLEN, protocol, raw_proto,
 				   !net_eq(vxlan->net, dev_net(vxlan->dev))))
 		goto drop;
@@ -1715,6 +1717,9 @@ static int vxlan_rcv(struct sock *sk, struct sk_buff *skb)
 		if (unlikely(!vxlan_remcsum(&unparsed, skb, vs->flags)))
 			goto drop;
 
+	/* 进行元数据的采集，将采集到的元数据保存到skb->dst上面。这里会进行tun_dst的
+	 * 分配，同时将外层报文的信息保存到里面。
+	 */
 	if (vxlan_collect_metadata(vs)) {
 		struct metadata_dst *tun_dst;
 
@@ -1750,6 +1755,9 @@ static int vxlan_rcv(struct sock *sk, struct sk_buff *skb)
 	}
 
 	if (!raw_proto) {
+		/* 重新设置mac头位置，解析出来三层协议，并将data移动到三层数据。同时，
+		 * 这里会将skb的目标网口设置为vxlan口。
+		 */
 		if (!vxlan_set_mac(vxlan, vs, skb, vni))
 			goto drop;
 	} else {
@@ -1758,6 +1766,9 @@ static int vxlan_rcv(struct sock *sk, struct sk_buff *skb)
 		skb->pkt_type = PACKET_HOST;
 	}
 
+	/* 下面就是对内层的三层报文数据进行的处理。此时拿到的还是外层的ip头，reset一下
+	 * 后就变成了内层的ip头。
+	 */
 	oiph = skb_network_header(skb);
 	skb_reset_network_header(skb);
 
@@ -2412,6 +2423,7 @@ void vxlan_xmit_one(struct sk_buff *skb, struct net_device *dev,
 		tos = info->key.tos;
 		udp_sum = !!(info->key.tun_flags & TUNNEL_CSUM);
 	}
+	/* 根据范围，随机选取一个端口（哈希出来的） */
 	src_port = udp_flow_src_port(dev_net(dev), skb, vxlan->cfg.port_min,
 				     vxlan->cfg.port_max, true);
 
