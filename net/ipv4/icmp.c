@@ -857,6 +857,11 @@ static enum skb_drop_reason icmp_unreach(struct sk_buff *skb)
 	struct net *net;
 	u32 info = 0;
 
+	/* 对于一些错误类的ICMP消息，比如主机不可达、MTU过小等，这里会从icmp报文里面
+	 * 拿到一些信息TCP/UDP的地址、端口信息，进行套接口的查找，具体以
+	 * tcp_v4_err 为例。
+	 */
+
 	net = dev_net(skb_dst(skb)->dev);
 
 	/*
@@ -1213,6 +1218,7 @@ int icmp_rcv(struct sk_buff *skb)
 	if (skb_checksum_simple_validate(skb))
 		goto csum_error;
 
+	/* 将data指针移动到icmp的数据区域 */
 	if (!pskb_pull(skb, sizeof(*icmph)))
 		goto error;
 
