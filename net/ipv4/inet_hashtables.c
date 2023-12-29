@@ -606,6 +606,11 @@ static int __inet_check_established(struct inet_timewait_death_row *death_row,
 				 * 对于TCP协议，这个函数最终会调用
 				 * tcp_twsk_unique ，如果启用了tcp_tw_reuse
 				 * 并且检查通过，那么认为这个tw不与我们冲突。
+				 * 
+				 * 这里如果进行了tw的重用的话，那么会基于当前tw套接口
+				 * 来计算初始序列号，基本算法为：
+				 *   tw套接口的最后一个序列号 + 65535 + 2
+				 * 如果结果为0的话，那么就取1
 				 */
 				if (twsk_unique(sk, sk2, twp))
 					break;

@@ -6920,6 +6920,13 @@ consume:
 		}
 		if (fastopen_fail)
 			return -1;
+		/* 如果当前进程阻塞在数据发送状态，比如是fastopen套接口，或者是非阻塞
+		 * 方式进行了connect，然后立马进行了数据发送，那么会阻塞在send_msg中。
+		 * 这种情况下，会采用延迟ACK的方式，即等待将数据和ACK一起发送。默认的
+		 * 等待时间为200ms。
+		 * 
+		 * 这是因为这种情况已经很明确了有数据要发送，因此是可以等待的。
+		 */
 		if (sk->sk_write_pending ||
 		    READ_ONCE(icsk->icsk_accept_queue.rskq_defer_accept) ||
 		    inet_csk_in_pingpong_mode(sk)) {
@@ -6936,6 +6943,7 @@ consume:
 						  TCP_DELACK_MAX, TCP_RTO_MAX);
 			goto consume;
 		}
+		/* 返回值是-1的话，立马响应ACK，并且会尝试发送数据 */
 		tcp_send_ack(sk);
 		return -1;
 	}
