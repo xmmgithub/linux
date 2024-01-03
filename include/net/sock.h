@@ -514,6 +514,7 @@ struct sock {
 	u16			sk_type;
 	u16			sk_protocol;
 	u16			sk_gso_max_segs;
+	/* 通过SO_LINGER选项设置的close阻塞时长 */
 	unsigned long	        sk_lingertime;
 	struct proto		*sk_prot_creator;
 	rwlock_t		sk_callback_lock;
