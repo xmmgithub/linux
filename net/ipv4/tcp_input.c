@@ -4060,6 +4060,10 @@ static void tcp_process_tlp_ack(struct sock *sk, u32 ack, int flag)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 
+	/* 发送完TLP后，如果没有再发生RTO的情况，那么这里会看看在ack达到tlp_high_seq
+	 * 的时候的状态，从而判断是真的发生了丢包。
+	 */
+
 	if (before(ack, tp->tlp_high_seq))
 		return;
 
@@ -4363,6 +4367,9 @@ old_ack:
 	/*
 	 * 如果报文携带sack信息，那么检查其是否是dsack报文，并判断是否要撤销拥塞状态。
 	 * 这里可以看到，如果收到了一个老的不携带sack信息的ack，那么是没有作用的。
+	 * 
+	 * 在四次挥手过程中，一个old ack会导致协议栈丢包，即不处理这个报文中的信息，即使
+	 * 它是FIN报文。
 	 */
 	if (TCP_SKB_CB(skb)->sacked) {
 		/* 进行sack信息的处理，包括dsack。*/
@@ -4731,6 +4738,8 @@ static int tcp_disordered_ack(const struct sock *sk, const struct sk_buff *skb)
 	u32 seq = TCP_SKB_CB(skb)->seq;
 	u32 ack = TCP_SKB_CB(skb)->ack_seq;
 
+	/* 判断一个报文是不是一个纯的有效的重复ACK？ */
+
 	return	/* 1. Pure ACK with correct sequence number. */
 		(th->ack && seq == TCP_SKB_CB(skb)->end_seq && seq == tp->rcv_nxt) &&
 
@@ -4750,6 +4759,9 @@ static inline bool tcp_paws_discard(const struct sock *sk,
 {
 	const struct tcp_sock *tp = tcp_sk(sk);
 
+	/* 如果PAWS检查不通过（返回true代表通过），同时这个skb没有出现ack乱序，那么
+	 * 就对齐进行丢包，即PAWS检查不通过。
+	 */
 	return !tcp_paws_check(&tp->rx_opt, TCP_PAWS_WINDOW) &&
 	       !tcp_disordered_ack(sk, skb);
 }
